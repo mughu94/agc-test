@@ -87,3 +87,46 @@ function onListening() {
     : 'port ' + addr.port;
   console.log('App started. Listening on ' + bind);
 }
+
+/**
+ * Graceful shutdown handling
+ */
+const prisma = require('./lib/prisma');
+
+process.on('SIGINT', async () => {
+  console.log('Received SIGINT. Graceful shutdown...');
+  
+  // Close HTTP server
+  server.close(async () => {
+    console.log('HTTP server closed.');
+    
+    // Disconnect Prisma client
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma client disconnected.');
+    } catch (error) {
+      console.error('Error disconnecting Prisma client:', error);
+    }
+    
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Received SIGTERM. Graceful shutdown...');
+  
+  // Close HTTP server
+  server.close(async () => {
+    console.log('HTTP server closed.');
+    
+    // Disconnect Prisma client
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma client disconnected.');
+    } catch (error) {
+      console.error('Error disconnecting Prisma client:', error);
+    }
+    
+    process.exit(0);
+  });
+});

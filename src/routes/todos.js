@@ -2,12 +2,17 @@
  * REST endpoint for /todos
  */
 
-const { PrismaClient, PrismaClientKnownRequestError } = require('@prisma/client');
-const sanitizeHtml = require('sanitize-html');
+const { PrismaClientKnownRequestError } = require('@prisma/client');
 const express = require('express');
 const router = express.Router();
 
-const prisma = new PrismaClient();
+// Use singleton Prisma instance
+const prisma = require('../lib/prisma');
+const { 
+  isValidObjectId, 
+  validateTodoInput, 
+  validateTodoUpdateInput 
+} = require('../lib/validation');
 
 // REMOVE TODO ITEMS BEGIN 
 const prepop = [
@@ -15,15 +20,29 @@ const prepop = [
   { id: "beeffeedbeeffeedbeeffeed", title: '<a href="https://adaptable.io/docs/starters/express-prisma-mongo-starter#idea-3-start-building-your-app-by-adding-more-api-services">Customize this app</a> by adding an API service to delete To Do items', done: false },
 ];
 
-prepop.map((i) => prisma.TodoItem.create({ data: i })
-  .then(() => console.log(`Added pre-populated item with id ${i.id}`))
-  .catch((e) => {
-    if(!((e instanceof PrismaClientKnownRequestError)
-      && e.code === "P2002")) {
-      console.error(`Error creating prepopulated item ${i.id}: ${e.message}`);
-    } // else prepopulated entries are already present
+// Properly manage prepopulation with error handling
+async function initializePrepopulatedData() {
+  try {
+    await Promise.all(
+      prepop.map(async (item) => {
+        try {
+          await prisma.TodoItem.create({ data: item });
+          console.log(`Added pre-populated item with id ${item.id}`);
+        } catch (e) {
+          if (!(e instanceof PrismaClientKnownRequestError && e.code === "P2002")) {
+            console.error(`Error creating prepopulated item ${item.id}: ${e.message}`);
+          }
+          // else prepopulated entries are already present
+        }
+      })
+    );
+  } catch (error) {
+    console.error('Error during prepopulation initialization:', error.message);
   }
-));
+}
+
+// Initialize prepopulated data
+initializePrepopulatedData();
 // REMOVE TODO ITEMS END
 
 const asyncMiddleware = fn => (req, res, next) => {
@@ -32,35 +51,55 @@ const asyncMiddleware = fn => (req, res, next) => {
 };
 
 router.post("/", asyncMiddleware(async (req, res) => {
-  const { title: titleIn, done } = req.body;
-  const title = sanitizeHtml(titleIn, {
-    allowedTags: [ 'a' ],
-    allowedAttributes: {
-      'a': [ 'href' ]
-    },
-  });
+  // Validate input using utility function
+  const validation = validateTodoInput(req.body);
+  
+  if (!validation.success) {
+    return res.status(400).json({ error: validation.error });
+  }
 
   const result = await prisma.TodoItem.create({
-    data: {
-      title,
-      done,
-    }
+    data: validation.data
   });
   res.json(result);
 }));
 
 router.get('/', asyncMiddleware(async (req, res) => {
-  const todos = await prisma.TodoItem.findMany();
+  const todos = await prisma.TodoItem.findMany({
+    orderBy: {
+      id: 'desc' // Show newest todos first
+    }
+  });
   res.json(todos);
 }));
 
 router.patch('/:id', asyncMiddleware(async (req, res) => {
   const { id } = req.params;
-  const updated = await prisma.TodoItem.update({
-    where: { id },
-    data: req.body,
-  });
-  res.json(updated);
+  
+  // Validate ObjectId format
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({ error: 'Invalid todo ID format' });
+  }
+  
+  // Validate and filter update data to prevent mass assignment
+  const validation = validateTodoUpdateInput(req.body);
+  
+  if (!validation.success) {
+    return res.status(400).json({ error: validation.error });
+  }
+  
+  try {
+    const updated = await prisma.TodoItem.update({
+      where: { id },
+      data: validation.data,
+    });
+    res.json(updated);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Todo not found' });
+    }
+    throw error;
+  }
 }));
 
 
